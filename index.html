@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Weather App</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body>
+    <h1>Weather in Kitwe</h1>
+    <p id="out">Loading...</p>
+  <script>
+      async function getWeather() {
+        const url = "https://api.open-meteo.com/v1/forecast?latitude=-12.8&longitude=28.2&current_weather=true";
+        const response = await fetch(url);
+        const data = await response.json();
+        document.getElementById("out").textContent =
+         "Temperature: " + data.current_weather.temperature + " °C, Wind: " +
+    data.current_weather.windspeed + " km/h";  
+      }
+      getWeather();
+    </script>
+  </body>
+</html>
