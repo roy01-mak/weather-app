@@ -3,20 +3,179 @@
   <head>
     <title>Weather App</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      body { font-family: Arial, sans-serif; max-width: 600px; margin: 20px auto; padding: 0 12px; }
+      iframe { width: 100%; height: 250px; border: 1px solid #ccc; border-radius: 8px; }
+      #status { color: #555; }
+    </style>
   </head>
   <body>
-    <h1>Weather in Kitwe</h1>
-    <p id="out">Loading...</p>
-  <script>
-      async function getWeather() {
-        const url = "https://api.open-meteo.com/v1/forecast?latitude=-12.8&longitude=28.2&current_weather=true";
-        const response = await fetch(url);
-        const data = await response.json();
-        document.getElementById("out").textContent =
-         "Temperature: " + data.current_weather.temperature + " °C, Wind: " +
-    data.current_weather.windspeed + " km/h";  
+    <h1>Weather near you</h1>
+    <p id="status">Finding your exact location...</p>
+    <p id="place"></p>
+    <p id="coords"></p>
+    <p id="quality"></p>
+    <iframe id="mapFrame" style="display:none"></iframe>
+    <p><a id="map" target="_blank"></a></p>
+    <p id="out"></p>
+    <p id="rain"></p>
+    <p id="sun"></p>
+    <p id="uv"></p>
+    <script>
+      let best = null;
+      let watchId = null;
+      let finished = false;
+
+      function uvLevel(uv) {
+        if (uv < 3) return "Low";
+        if (uv < 6) return "Moderate";
+        if (uv < 8) return "High";
+        if (uv < 11) return "Very high";
+        return "Extreme";
       }
-      getWeather();
+
+      function qualityText(accuracy) {
+        if (accuracy <= 30) return "Very accurate (GPS)";
+        if (accuracy <= 100) return "Good";
+        if (accuracy <= 1000) return "Fair";
+        return "Approximate (network or Wi-Fi). Open this page on a phone, outdoors, for an exact point.";
+      }
+
+      function showPosition(lat, lon, accuracy) {
+        document.getElementById("coords").textContent =
+          "Coordinates: " + lat.toFixed(6) + ", " + lon.toFixed(6);
+        document.getElementById("quality").textContent =
+          "Accuracy: about " + Math.round(accuracy) + " m. " + qualityText(accuracy);
+      }
+
+      function showMap(lat, lon) {
+        const d = 0.002;
+        const frame = document.getElementById("mapFrame");
+        frame.src = "https://www.openstreetmap.org/export/embed.html?bbox=" +
+          (lon - d) + "%2C" + (lat - d) + "%2C" + (lon + d) + "%2C" + (lat + d) +
+          "&layer=mapnik&marker=" + lat + "%2C" + lon;
+        frame.style.display = "block";
+
+        const link = document.getElementById("map");
+        link.href = "https://www.google.com/maps?q=" + lat + "," + lon;
+        link.textContent = "Open this exact point in Google Maps";
+      }
+
+      async function getPlaceName(lat, lon) {
+        try {
+          const url = "https://nominatim.openstreetmap.org/reverse?format=jsonv2" +
+            "&zoom=18&addressdetails=1&accept-language=en&lat=" + lat + "&lon=" + lon;
+          const response = await fetch(url);
+          const data = await response.json();
+          const a = data.address;
+          const parts = [
+            a.road,
+            a.neighbourhood || a.suburb || a.city_district,
+            a.village || a.town || a.city,
+            a.country
+          ].filter(Boolean);
+          document.getElementById("place").textContent = "Location: " + parts.join(", ");
+        } catch (error) {
+          document.getElementById("place").textContent =
+            "Location found, but the place name could not be loaded.";
+        }
+      }
+
+      async function getWeather(lat, lon) {
+        try {
+          const url = "https://api.open-meteo.com/v1/forecast?latitude=" + lat +
+            "&longitude=" + lon +
+            "&current_weather=true&minutely_15=precipitation&forecast_minutely_15=8" +
+            "&daily=sunrise,sunset,uv_index_max&timezone=auto";
+          const response = await fetch(url);
+          const data = await response.json();
+
+          document.getElementById("out").textContent =
+            "Temperature: " + data.current_weather.temperature + " °C, Wind: " +
+            data.current_weather.windspeed + " km/h";
+
+          const now = new Date(data.current_weather.time);
+
+          // Rain
+          const times = data.minutely_15.time;
+          const rain = data.minutely_15.precipitation;
+          let rainMessage = "No rain expected in the next 2 hours.";
+          for (let i = 0; i < times.length; i++) {
+            const minutes = (new Date(times[i]) - now) / 60000;
+            if (minutes >= 0 && rain[i] > 0) {
+              if (minutes < 15) {
+                rainMessage = "Rain expected within the next 15 minutes.";
+              } else {
+                rainMessage = "Rain expected in about " + minutes + " minutes.";
+              }
+              break;
+            }
+          }
+          document.getElementById("rain").textContent = rainMessage;
+
+          // Sun
+          const sunriseText = data.daily.sunrise[0];
+          const sunsetText = data.daily.sunset[0];
+          const sunset = new Date(sunsetText);
+          const minutesLeft = Math.round((sunset - now) / 60000);
+
+          let sunMessage = "Sunrise: " + sunriseText.slice(11, 16) +
+            ", Sunset: " + sunsetText.slice(11, 16) + ". ";
+          if (minutesLeft > 0) {
+            sunMessage += "Sunset in " + Math.floor(minutesLeft / 60) + " h " +
+              (minutesLeft % 60) + " min.";
+          } else {
+            sunMessage += "The sun has set for today.";
+          }
+          document.getElementById("sun").textContent = sunMessage;
+
+          // UV
+          const uv = data.daily.uv_index_max[0];
+          document.getElementById("uv").textContent =
+            "UV index today: " + uv + " (" + uvLevel(uv) + ")";
+        } catch (error) {
+          document.getElementById("out").textContent =
+            "Could not load the weather. Check your internet connection.";
+        }
+      }
+
+      function finish() {
+        if (finished) return;
+        finished = true;
+        if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+
+        if (!best) {
+          document.getElementById("status").textContent =
+            "Could not get your location. Allow location access and refresh.";
+          return;
+        }
+        document.getElementById("status").textContent = "Best location found.";
+        showPosition(best.lat, best.lon, best.accuracy);
+        showMap(best.lat, best.lon);
+        getPlaceName(best.lat, best.lon);
+        getWeather(best.lat, best.lon);
+      }
+
+      if (!navigator.geolocation) {
+        document.getElementById("status").textContent =
+          "Your browser can't share your location.";
+      } else {
+        watchId = navigator.geolocation.watchPosition(
+          function (position) {
+            const c = position.coords;
+            if (!best || c.accuracy < best.accuracy) {
+              best = { lat: c.latitude, lon: c.longitude, accuracy: c.accuracy };
+              showPosition(best.lat, best.lon, best.accuracy);
+              document.getElementById("status").textContent =
+                "Improving accuracy... currently about " + Math.round(c.accuracy) + " m";
+            }
+            if (c.accuracy <= 20) finish();
+          },
+          function () { finish(); },
+          { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+        );
+        setTimeout(finish, 20000);
+      }
     </script>
   </body>
 </html>
